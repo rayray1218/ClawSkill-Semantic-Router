@@ -1,32 +1,76 @@
 ---
 name: Semantic Model Orchestrator
-description: A powerful model routing skill that analyzes query intent and cost-efficiency to select the optimal LLM (Elite/Balanced/Basic) before execution.
-version: 1.0.0
+description: Intelligently routes AI queries to the optimal LLM tier (Elite/Balanced/Basic) using semantic analysis. Saves cost by sending simple queries to cheaper models and complex ones to powerful models.
+version: 1.2.0
 author: Ray
-tags: [llm-ops, routing, efficiency, selection]
+tags: [llm-ops, routing, cost-saving, efficiency, orchestration]
+entry_point: scripts/model_router.py
 ---
 
 # Semantic Model Orchestrator
 
-This skill provides an intelligent middle layer for AI agents to decide which model tier should handle a specific task. By using semantic analysis, it categorized queries into **Elite**, **Balanced**, or **Basic** levels.
+An intelligent middleware layer that analyzes user query complexity and routes it to the most cost-effective LLM — without sacrificing quality.
+
+## How It Works
+
+The router embeds the incoming query using `sentence-transformers` and computes cosine similarity against a curated **Intent Matrix** to classify it into one of three tiers:
+
+| Tier | Model | Use Case |
+|---|---|---|
+| **ELITE** | `anthropic/claude-3-5-sonnet-latest` | Architecture design, complex algorithms, security audits |
+| **BALANCED** | `openai/gpt-4o-mini` | Summarization, translation, email drafting, explanations |
+| **BASIC** | `deepseek/deepseek-chat` | Greetings, simple math, status checks, small talk |
 
 ## Features
-- **Semantic Intent Recognition**: Uses vector embeddings to detect query complexity.
-- **Cost-Efficiency Orchestration**: Routes queries to **Elite**, **Balanced**, or **Basic** models.
-- **ClawHub Optimized**: Default tiers for Claude 3.5 Sonnet, GPT-4o-mini, and DeepSeek.
-- **Rolling Adjustment**: Built-in logic to refine intent keywords from user history.
-- **Multi-Provider Support**: Supports OpenAI, Anthropic, Gemini, and DeepSeek.
 
-## Model Tiers
-- **Elite**: `anthropic/claude-3-5-sonnet-latest`
-- **Balanced**: `openai/gpt-4o-mini`
-- **Basic**: `deepseek/deepseek-chat`
+- **Semantic Intent Recognition** — Embedding-based similarity matching across 3 tiers
+- **Keyword Fallback** — Rule-based routing when `sentence-transformers` is unavailable
+- **Rolling Adjustment API** — `add_keywords()` and `refine_keywords()` allow dynamic retraining from query history
+- **Query Logging** — Every query is logged to `query_history.json` for future refinement
+- **Zero Hard Dependencies** — Degrades gracefully without `torch` or `sentence-transformers`
 
 ## Usage
-Add this skill to your agent's capability list. The agent will call the `get_optimal_model` tool before making main LLM calls to optimize performance and budget.
 
-### Example Tool Call
 ```python
-result = router.analyze_and_route("Design a high-scalable microservices architecture for a fintech app.")
-# Returns: {"tier": "ELITE", "suggested_model": "anthropic/claude-3-5-sonnet-latest"}
+from scripts.model_router import ModelRouter
+
+router = ModelRouter()
+
+result = router.route("Design a distributed caching layer for a fintech platform.")
+# {"tier": "ELITE", "model": "anthropic/claude-3-5-sonnet-latest", "confidence": 0.97}
+
+result = router.route("Translate this email to Spanish.")
+# {"tier": "BALANCED", "model": "openai/gpt-4o-mini", "confidence": 0.96}
+
+result = router.route("Hello!")
+# {"tier": "BASIC", "model": "deepseek/deepseek-chat", "confidence": 0.99}
 ```
+
+## Dynamic Keyword Expansion
+
+Add new routing signals at runtime without restarting:
+
+```python
+router.add_keywords("ELITE", ["blockchain audit", "zero-knowledge proof", "Rust systems programming"])
+```
+
+## Model Tiers (Configurable)
+
+Override any tier at initialization:
+
+```python
+router = ModelRouter(
+    elite_model="anthropic/claude-opus-4-5-20251101",
+    balanced_model="openai/gpt-4o",
+    basic_model="deepseek/deepseek-chat"
+)
+```
+
+## Requirements
+
+```
+sentence-transformers>=2.2.2
+numpy>=1.24.0
+```
+
+> `sentence-transformers` and `torch` are optional — the skill falls back to keyword matching if they are not installed.

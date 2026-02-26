@@ -1,178 +1,251 @@
+"""
+Semantic Model Orchestrator — model_router.py
+=============================================
+Entry point for the ClawHub Skill.
+Routes incoming queries to the optimal LLM tier based on semantic similarity.
+
+Tiers:
+  ELITE    → anthropic/claude-3-5-sonnet-latest
+  BALANCED → openai/gpt-4o-mini
+  BASIC    → deepseek/deepseek-chat
+
+Dependencies (all optional — falls back to keyword matching if missing):
+  sentence-transformers, numpy
+"""
+
 import re
-import json
 import os
+import json
+
+# ── Optional heavy imports ─────────────────────────────────────────────────────
 try:
     from sentence_transformers import SentenceTransformer, util
+    import numpy as np
     _HAS_SEMANTIC = True
 except ImportError:
     _HAS_SEMANTIC = False
 
+
 class ModelRouter:
     """
-    Standalone Model Router for OpenClaw Skills.
-    Categorizes inputs into Elite, Balanced, or Basic tiers.
-    Supports dynamic keyword refinement (Rolling Adjustment).
+    Intelligent LLM Model Router for OpenClaw / ClawHub.
+
+    Classifies a natural-language query into ELITE / BALANCED / BASIC
+    using cosine similarity over sentence embeddings, with a keyword
+    fallback when the embedding library is not installed.
     """
-    def __init__(self, 
-                 elite_model="anthropic/claude-3-5-sonnet-latest", 
-                 balanced_model="openai/gpt-4o-mini", 
-                 basic_model="deepseek/deepseek-chat",
-                 history_file="query_history.json"):
+
+    def __init__(
+        self,
+        elite_model:    str = "anthropic/claude-3-5-sonnet-latest",
+        balanced_model: str = "openai/gpt-4o-mini",
+        basic_model:    str = "deepseek/deepseek-chat",
+        history_file:   str = "query_history.json",
+    ):
         self.mapping = {
-            "ELITE": elite_model,
+            "ELITE":    elite_model,
             "BALANCED": balanced_model,
-            "BASIC": basic_model
+            "BASIC":    basic_model,
         }
         self.history_file = history_file
         self.encoder = None
-        self.intent_embeddings = {}
-        
-        # Default Intent Matrix - Enhanced for practical use cases (ClawHub Ready)
-        self.intent_matrix = {
+        self.intent_embeddings: dict = {}
+
+        # ── Intent Matrix ──────────────────────────────────────────────────────
+        # ELITE   : deep technical, architectural, or security-critical tasks
+        # BALANCED: everyday productive tasks — summaries, translations, Q&A
+        # BASIC   : chit-chat, trivial facts, status checks
+        self.intent_matrix: dict[str, list[str]] = {
             "ELITE": [
-                "architecture design", "complex algorithm", "system optimization", 
+                # English
+                "architecture design", "complex algorithm", "system optimization",
                 "precision reasoning", "heavy coding", "security audit",
                 "high-frequency trading", "latency optimization", "financial modeling",
                 "distributed systems", "database internals", "kernel programming",
-                "精密推理", "架構設計", "演算法開發", "安全審查", "複雜邏輯開發", "深度性能優化", "分散式架構"
+                "implement a", "write a program", "write a function",
+                "build a system", "design a", "analyze the complexity",
+                "debug this code", "refactor", "microservice",
+                # Chinese
+                "精密推理", "架構設計", "演算法開發", "安全審查",
+                "複雜邏輯開發", "深度性能優化", "分散式架構",
             ],
             "BALANCED": [
-                "data extraction", "summarization", "translation", 
-                "creative writing", "email drafting", "bug fixing",
-                "Python script", "code explanation", "test case generation",
-                "web scraping", "text classification", "format conversion",
-                "摘要", "內容整理", "翻譯", "創意寫作", "日常郵件", "程式錯修復", "程式碼解釋", "格式轉換"
+                # English
+                "data extraction", "summarization", "summarize", "translation",
+                "translate", "creative writing", "email drafting", "bug fixing",
+                "code explanation", "test case generation", "web scraping",
+                "text classification", "format conversion", "explain",
+                "what is", "how does", "list the", "give me an example",
+                "rewrite", "simplify", "extract",
+                # Chinese
+                "摘要", "內容整理", "翻譯", "創意寫作",
+                "日常郵件", "程式碼解釋", "格式轉換",
             ],
             "BASIC": [
-                "greeting", "small talk", "weather", "simple math",
-                "help command", "status check", "simple question",
-                "token count", "current time", "joke",
-                "日常對話", "閒聊", "天氣查詢", "簡單運算", "狀態檢查", "問候", "講笑話"
-            ]
+                # English
+                "hello", "hi", "hey", "good morning", "how are you",
+                "small talk", "weather", "simple math", "what time",
+                "tell me a joke", "fun fact", "status check", "who are you",
+                "thank you", "thanks", "bye", "goodbye", "set a timer",
+                # Chinese
+                "日常對話", "閒聊", "天氣查詢", "簡單運算",
+                "狀態檢查", "問候", "講笑話",
+            ],
         }
 
+        # ── Load encoder (optional) ────────────────────────────────────────────
         if _HAS_SEMANTIC:
             try:
-                # Using a slightly faster/smaller model for efficiency
-                self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
+                self.encoder = SentenceTransformer("all-MiniLM-L6-v2")
                 self._prepare_embeddings()
-            except Exception as e:
-                print(f"Error loading encoder: {e}")
+            except Exception as exc:
+                # Non-fatal: we fall back to keyword matching
+                print(f"[ModelRouter] Encoder unavailable: {exc}")
 
-    def _prepare_embeddings(self):
+    # ── Embedding helpers ──────────────────────────────────────────────────────
+
+    def _prepare_embeddings(self) -> None:
+        """Pre-compute per-tier embedding matrices from the intent matrix."""
         self.intent_embeddings = {}
-        for tier, examples in self.intent_matrix.items():
-            embeddings = self.encoder.encode(examples, convert_to_tensor=True)
-            self.intent_embeddings[tier] = embeddings
+        for tier, phrases in self.intent_matrix.items():
+            self.intent_embeddings[tier] = self.encoder.encode(
+                phrases, convert_to_tensor=True
+            )
 
-    def route(self, query: str):
+    # ── Core routing ───────────────────────────────────────────────────────────
+
+    def route(self, query: str) -> dict:
         """
-        Input: User query string
-        Output: Dict containing predicted tier and the corresponding model name
+        Classify *query* and return the recommended model.
+
+        Returns
+        -------
+        {
+            "tier":       "ELITE" | "BALANCED" | "BASIC",
+            "model":      "<provider>/<model-id>",
+            "confidence": float,   # 0–1
+        }
         """
         best_tier = "BASIC"
-        max_similarity = 0.0
-        similarities = {}
+        confidence = 1.0
 
-        # 1. Semantic Check
-        if self.encoder:
-            query_emb = self.encoder.encode(query, convert_to_tensor=True)
-            for tier, cluster in self.intent_embeddings.items():
-                # Max similarity against any keyword in the tier
-                sims = util.cos_sim(query_emb, cluster)[0]
-                best_sim = torch.max(sims).item()
-                similarities[tier] = best_sim
-                if best_sim > max_similarity:
-                    max_similarity = best_sim
-                    best_tier = tier
-            
-            # Confidence threshold - adjusted for max-based comparison
-            if max_similarity < 0.4: best_tier = "BASIC"
+        if self.encoder and self.intent_embeddings:
+            best_tier, confidence = self._semantic_route(query)
         else:
-            # 2. Simple Keyword Fallback
-            for tier in ["ELITE", "BALANCED"]:
-                if any(re.search(re.escape(kw), query, re.IGNORECASE) for kw in self.intent_matrix[tier]):
-                    best_tier = tier
-                    break
+            best_tier = self._keyword_route(query)
 
-        result = {
-            "tier": best_tier,
-            "model": self.mapping.get(best_tier),
-            "confidence": float(max_similarity) if self.encoder else 1.0,
-            "all_scores": similarities
-        }
-        
-        # Log for rolling adjustment
         self._log_query(query, best_tier)
-        
-        return result
 
-    def _log_query(self, query, tier):
-        """Logs the query for future keyword refinement."""
-        try:
-            history = []
-            if os.path.exists(self.history_file):
-                with open(self.history_file, 'r', encoding='utf-8') as f:
-                    try:
-                        history = json.load(f)
-                    except:
-                        history = []
-            
-            history.append({"query": query, "tier": tier, "timestamp": os.path.getmtime(self.history_file) if os.path.exists(self.history_file) else 0})
-            
-            # Keep only last 1000 queries
-            if len(history) > 1000:
-                history = history[-1000:]
-                
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(history, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            pass
+        return {
+            "tier":       best_tier,
+            "model":      self.mapping[best_tier],
+            "confidence": confidence,
+        }
 
-    def refine_keywords(self):
+    def _semantic_route(self, query: str) -> tuple[str, float]:
+        """Return (tier, confidence) using max cosine-similarity per tier."""
+        q_emb = self.encoder.encode(query, convert_to_tensor=True)
+        best_tier = "BASIC"
+        max_sim = 0.0
+
+        for tier, cluster in self.intent_embeddings.items():
+            sims = util.cos_sim(q_emb, cluster)[0]
+            peak = float(sims.max())
+            if peak > max_sim:
+                max_sim = peak
+                best_tier = tier
+
+        # Low-confidence → BASIC (safe default)
+        if max_sim < 0.40:
+            best_tier = "BASIC"
+
+        return best_tier, round(max_sim, 4)
+
+    def _keyword_route(self, query: str) -> str:
+        """Rule-based fallback when sentence-transformers is not available."""
+        lower = query.lower()
+        for tier in ("ELITE", "BALANCED"):          # BASIC is the catch-all
+            for kw in self.intent_matrix[tier]:
+                if re.search(re.escape(kw.lower()), lower):
+                    return tier
+        return "BASIC"
+
+    # ── Rolling Adjustment API ─────────────────────────────────────────────────
+
+    def add_keywords(self, tier: str, keywords: list[str]) -> list[str]:
         """
-        Rollout refinement: Analyze history and update intent mapping.
-        This provides a hook for an external process or LLM call to suggest new terms.
+        Add new routing signals to *tier* and refresh embeddings.
+
+        Parameters
+        ----------
+        tier     : "ELITE", "BALANCED", or "BASIC"
+        keywords : list of new keyword phrases
+
+        Returns
+        -------
+        List of keywords that were actually added (skips duplicates).
+        """
+        if tier not in self.intent_matrix:
+            raise ValueError(f"Unknown tier '{tier}'. Must be ELITE, BALANCED, or BASIC.")
+
+        added = []
+        for kw in keywords:
+            if kw not in self.intent_matrix[tier]:
+                self.intent_matrix[tier].append(kw)
+                added.append(kw)
+
+        if added and self.encoder:
+            self._prepare_embeddings()
+
+        return added
+
+    def refine_keywords(self) -> str:
+        """
+        Read collected query history and return a status string.
+        In a live skill, this is the hook for an LLM to suggest new keywords.
         """
         if not os.path.exists(self.history_file):
             return "No history found."
-            
-        with open(self.history_file, 'r', encoding='utf-8') as f:
+        with open(self.history_file, "r", encoding="utf-8") as f:
             history = json.load(f)
-            
-        # Example: Simple keyword frequency analysis (placeholder for LLM refinement)
-        # In practice, an AI agent would read this 'history' and call an ELITE model
-        # to generate a list of new keywords for each tier.
         return f"History contains {len(history)} queries ready for refinement."
 
-    def add_keywords(self, tier: str, keywords: list):
-        """Add new keywords to a specific tier and refresh embeddings."""
-        if tier in self.intent_matrix:
-            added = []
-            for kw in keywords:
-                if kw not in self.intent_matrix[tier]:
-                    self.intent_matrix[tier].append(kw)
-                    added.append(kw)
-            if added and self.encoder:
-                self._prepare_embeddings()
-            return added
-        return []
+    # ── Logging (internal) ─────────────────────────────────────────────────────
 
-# Usage Example for the Skill
+    def _log_query(self, query: str, tier: str) -> None:
+        """Append the query + tier to the history file for offline analysis."""
+        try:
+            history: list = []
+            if os.path.exists(self.history_file):
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            history.append({"query": query, "tier": tier})
+            if len(history) > 1000:
+                history = history[-1000:]
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass  # Non-fatal
+
+
+# ── Smoke test ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import torch
     router = ModelRouter()
-    
-    # Simulate queries
-    test_queries = [
-        "How's the weather today?",
-        "Write a complex Python script for high-frequency trading latency optimization.",
-        "Summarize this long meeting transcript into bullet points.",
-        "這是一個關於分散式系統架構的深度設計問題。"
+
+    probes = [
+        ("How are you doing today?",                                       "BASIC"),
+        ("Tell me a joke.",                                                "BASIC"),
+        ("What time is it now?",                                           "BASIC"),
+        ("Summarize this article in three bullet points.",                 "BALANCED"),
+        ("Translate this paragraph from English to French.",               "BALANCED"),
+        ("What does 'photosynthesis' mean?",                               "BALANCED"),
+        ("Implement a thread-safe LRU cache in Python.",                   "ELITE"),
+        ("Design a microservices architecture for a payments platform.",   "ELITE"),
+        ("Analyze the time complexity of quicksort and heapsort.",         "ELITE"),
     ]
-    
-    print(f"{'Query':<50} | {'Tier':<10} | {'Score':<6}")
-    print("-" * 75)
-    for q in test_queries:
-        decision = router.route(q)
-        print(f"{q[:48]:<50} | {decision['tier']:<10} | {decision['confidence']:.3f}")
+
+    print(f"\n{'Query':<55} {'Tier':<10} {'Conf'}")
+    print("─" * 75)
+    for text, _ in probes:
+        res = router.route(text)
+        print(f"{text[:53]:<55} {res['tier']:<10} {res['confidence']:.3f}")
