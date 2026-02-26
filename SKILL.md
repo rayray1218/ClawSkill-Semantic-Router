@@ -5,7 +5,7 @@ version: 1.2.0
 author: Ray
 tags: [llm-ops, routing, cost-saving, efficiency, orchestration]
 homepage: https://github.com/rayray1218/ClawSkill-Semantic-Router
-files: ["scripts/*"]
+files: ["scripts/model_router.py", "scripts/requirements.txt"]
 dependencies:
   - sentence-transformers>=2.2.2
   - numpy>=1.24.0
