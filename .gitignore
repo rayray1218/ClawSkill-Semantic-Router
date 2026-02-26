@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+classifier.joblib
+query_history.json
+*.joblib
+.env
