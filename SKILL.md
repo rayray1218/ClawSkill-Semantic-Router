@@ -12,9 +12,15 @@ This skill provides an intelligent middle layer for AI agents to decide which mo
 
 ## Features
 - **Semantic Intent Recognition**: Uses vector embeddings to detect query complexity.
-- **Cost-Efficiency Orchestration**: Automatically routes simple queries to basic models to save costs.
-- **Multi-Provider Support**: Seamlessly works with OpenAI, Anthropic, and Google Gemini via LiteLLM.
-- **Personalized Mapping**: Allows distinct configurations for each project or user.
+- **Cost-Efficiency Orchestration**: Routes queries to **Elite**, **Balanced**, or **Basic** models.
+- **ClawHub Optimized**: Default tiers for Claude 3.5 Sonnet, GPT-4o-mini, and DeepSeek.
+- **Rolling Adjustment**: Built-in logic to refine intent keywords from user history.
+- **Multi-Provider Support**: Supports OpenAI, Anthropic, Gemini, and DeepSeek.
+
+## Model Tiers
+- **Elite**: `anthropic/claude-3-5-sonnet-latest`
+- **Balanced**: `openai/gpt-4o-mini`
+- **Basic**: `deepseek/deepseek-chat`
 
 ## Usage
 Add this skill to your agent's capability list. The agent will call the `get_optimal_model` tool before making main LLM calls to optimize performance and budget.
