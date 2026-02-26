@@ -21,9 +21,20 @@ import json
 try:
     from sentence_transformers import SentenceTransformer, util
     import numpy as np
+    import joblib
     _HAS_SEMANTIC = True
 except ImportError:
     _HAS_SEMANTIC = False
+
+# Try to load text-based weights as a portable fallback
+try:
+    try:
+        from scripts import model_weights
+    except ImportError:
+        import model_weights
+    _HAS_WEIGHTS = True
+except ImportError:
+    _HAS_WEIGHTS = False
 
 
 class ModelRouter:
@@ -49,6 +60,7 @@ class ModelRouter:
         }
         self.history_file = history_file
         self.encoder = None
+        self.classifier = None
         self.intent_embeddings: dict = {}
 
         # ── Intent Matrix ──────────────────────────────────────────────────────
@@ -97,10 +109,40 @@ class ModelRouter:
         if _HAS_SEMANTIC:
             try:
                 self.encoder = SentenceTransformer("all-MiniLM-L6-v2")
-                self._prepare_embeddings()
+                
+                # Check for trained classifier
+                model_path = os.path.join(os.path.dirname(__file__), "classifier.joblib")
+                if os.path.exists(model_path):
+                    self.classifier = joblib.load(model_path)
+                elif _HAS_WEIGHTS:
+                    # Use the text-based weights (ClawHub compatible)
+                    self.classifier = self._create_manual_classifier()
+                else:
+                    self._prepare_embeddings()
             except Exception as exc:
                 # Non-fatal: we fall back to keyword matching
-                print(f"[ModelRouter] Encoder unavailable: {exc}")
+                print(f"[ModelRouter] Encoder/Classifier unavailable: {exc}")
+
+    def _create_manual_classifier(self):
+        """Creates a mock classifier that uses the text-based weights."""
+        class ManualClassifier:
+            def __init__(self, weights, intercept, classes):
+                self.coef_ = np.array(weights)
+                self.intercept_ = np.array(intercept)
+                self.classes_ = np.array(classes)
+
+            def predict_proba(self, X):
+                # Logistic Regression: softmax(XW^T + b)
+                # Ensure X is shape (n_samples, n_features)
+                if len(X.shape) == 1:
+                    X = X.reshape(1, -1)
+                
+                scores = np.dot(X, self.coef_.T) + self.intercept_
+                # Stable Softmax
+                exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+                return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+        return ManualClassifier(model_weights.COEF, model_weights.INTERCEPT, model_weights.CLASSES)
 
     # ── Embedding helpers ──────────────────────────────────────────────────────
 
@@ -129,7 +171,9 @@ class ModelRouter:
         best_tier = "BASIC"
         confidence = 1.0
 
-        if self.encoder and self.intent_embeddings:
+        if self.encoder and self.classifier:
+            best_tier, confidence = self._ml_route(query)
+        elif self.encoder and self.intent_embeddings:
             best_tier, confidence = self._semantic_route(query)
         else:
             best_tier = self._keyword_route(query)
@@ -141,6 +185,20 @@ class ModelRouter:
             "model":      self.mapping[best_tier],
             "confidence": confidence,
         }
+
+    def _ml_route(self, query: str) -> tuple[str, float]:
+        """Return (tier, confidence) using the trained LogisticRegression classifier."""
+        q_emb = self.encoder.encode([query])
+        prob = self.classifier.predict_proba(q_emb)[0]
+        max_idx = int(np.argmax(prob))
+        best_tier = str(self.classifier.classes_[max_idx])
+        max_prob = float(prob[max_idx])
+        
+        # Low-confidence fallback
+        if max_prob < 0.40:
+            best_tier = "BASIC"
+            
+        return best_tier, round(max_prob, 4)
 
     def _semantic_route(self, query: str) -> tuple[str, float]:
         """Return (tier, confidence) using max cosine-similarity per tier."""
@@ -228,24 +286,37 @@ class ModelRouter:
             pass  # Non-fatal
 
 
-# ── Smoke test ─────────────────────────────────────────────────────────────────
+# ── Smoke test and CLI ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Semantic Model Orchestrator CLI")
+    parser.add_argument("query", nargs="*", help="The query text you want to route. If not provided, runs a smoke test.")
+    args = parser.parse_args()
+
     router = ModelRouter()
 
-    probes = [
-        ("How are you doing today?",                                       "BASIC"),
-        ("Tell me a joke.",                                                "BASIC"),
-        ("What time is it now?",                                           "BASIC"),
-        ("Summarize this article in three bullet points.",                 "BALANCED"),
-        ("Translate this paragraph from English to French.",               "BALANCED"),
-        ("What does 'photosynthesis' mean?",                               "BALANCED"),
-        ("Implement a thread-safe LRU cache in Python.",                   "ELITE"),
-        ("Design a microservices architecture for a payments platform.",   "ELITE"),
-        ("Analyze the time complexity of quicksort and heapsort.",         "ELITE"),
-    ]
+    if args.query:
+        # CLI Mode
+        user_query = " ".join(args.query)
+        res = router.route(user_query)
+        print(json.dumps(res, indent=2))
+    else:
+        # Smoke Test Mode
+        probes = [
+            ("How are you doing today?",                                       "BASIC"),
+            ("Tell me a joke.",                                                "BASIC"),
+            ("What time is it now?",                                           "BASIC"),
+            ("Summarize this article in three bullet points.",                 "BALANCED"),
+            ("Translate this paragraph from English to French.",               "BALANCED"),
+            ("What does 'photosynthesis' mean?",                               "BALANCED"),
+            ("Implement a thread-safe LRU cache in Python.",                   "ELITE"),
+            ("Design a microservices architecture for a payments platform.",   "ELITE"),
+            ("Analyze the time complexity of quicksort and heapsort.",         "ELITE"),
+        ]
 
-    print(f"\n{'Query':<55} {'Tier':<10} {'Conf'}")
-    print("─" * 75)
-    for text, _ in probes:
-        res = router.route(text)
-        print(f"{text[:53]:<55} {res['tier']:<10} {res['confidence']:.3f}")
+        print(f"\n{'Query':<55} {'Tier':<10} {'Conf'}")
+        print("─" * 75)
+        for text, _ in probes:
+            res = router.route(text)
+            print(f"{text[:53]:<55} {res['tier']:<10} {res['confidence']:.3f}")
