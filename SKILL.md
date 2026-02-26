@@ -1,91 +1,146 @@
 ---
 name: semantic-model-router
-description: Routes AI queries to the optimal LLM tier (Elite/Balanced/Basic) using semantic similarity. Saves cost by sending simple queries to cheap models and complex ones to powerful models. Use this skill before any LLM call to pick the right model.
-version: 1.2.0
+description: Smart LLM Router — routes every query to the cheapest capable model. Supports 17 models across Anthropic, OpenAI, Google, DeepSeek & xAI (Grok). Uses a pre-trained ML classifier. No extra API keys required.
+version: 2.0.0
 author: Ray
-tags: [llm-ops, routing, cost-saving, efficiency, orchestration]
+tags: [llm-ops, routing, cost-saving, openclaw, semantic-router, multi-model]
 homepage: https://github.com/rayray1218/ClawSkill-Semantic-Router
 files: ["scripts/model_router.py", "scripts/model_weights.py", "scripts/requirements.txt"]
 dependencies:
   - sentence-transformers>=2.2.2
   - numpy>=1.24.0
-requires:
-  env: []
 ---
 
-# Semantic Model Orchestrator
+# Semantic Model Router
 
-An intelligent middleware layer that analyzes user query complexity and routes it to the most cost-effective LLM tier — without sacrificing response quality.
+Smart LLM router that saves up to **99%** on inference costs by routing each request to the cheapest model that can handle it. Powered by a pre-trained ML classifier and semantic embeddings — no external calls, no API keys needed.
 
-## When to Use This Skill
+## Install
 
-Use this skill **before every main LLM call** to determine which model tier is most appropriate. The agent should:
+```bash
+openclaw plugins install @rayray1218/semantic-model-router
+```
 
-1. Call `ModelRouter.route(query)` with the user's query.
-2. Read the returned `tier` and `model` fields.
-3. Forward the query to that model.
-
-## How It Works
+## Quick Start
 
 ```python
 from scripts.model_router import ModelRouter
 
 router = ModelRouter()
-result = router.route("Design a distributed caching layer for a fintech platform.")
-# Returns: {"tier": "ELITE", "model": "anthropic/claude-3-5-sonnet-latest", "confidence": 0.97}
+res = router.route("Design a distributed caching layer for a fintech platform.")
+print(res["report"])
+# [ClawRouter] anthropic/claude-sonnet-4-6 (ELITE, ml, conf=0.97)
+#              Cost: $3.0/M | Baseline: $10.0/M | Saved: 70.0%
 ```
 
-## Model Tiers
+## How Routing Works
 
-| Tier | Default Model | Trigger Examples |
-|---|---|---|
-| **ELITE** | `anthropic/claude-3-5-sonnet-latest` | Architecture design, complex algorithms, security audits, implement X |
-| **BALANCED** | `openai/gpt-4o-mini` | Summarization, translation, email drafting, explain X |
-| **BASIC** | `deepseek/deepseek-chat` | Greetings, simple math, status checks, small talk |
+Queries are classified into three tiers through a **3-stage pipeline**:
 
-## Core Script: `scripts/model_router.py`
+1. **ML Classifier** (primary): A Logistic Regression model trained on 6,000+ labeled queries. Runs in <1ms from embedded weights in `model_weights.py`.
+2. **Semantic Embeddings** (fallback): Cosine similarity to tier intent vectors via `sentence-transformers`.
+3. **Keyword Rules** (last resort): Pattern matching with no dependencies.
 
-The entry point for this skill. Import and call `ModelRouter.route(query: str)`.
+| Tier | Default Model | Typical Workload | Cost/1M | vs Baseline |
+|---|---|---|---|---|
+| **BASIC** | `deepseek/deepseek-chat` | Greetings, simple Q&A, chit-chat | $0.14 | **99% saved** |
+| **BALANCED** | `openai/gpt-4o-mini` | Summaries, translations, explanations | $0.15 | **99% saved** |
+| **ELITE** | `anthropic/claude-sonnet-4-6` | Complex coding, architecture, security | $3.00 | **70% saved** |
 
-**Returns:**
-```json
-{
-  "tier": "ELITE",
-  "model": "anthropic/claude-3-5-sonnet-latest",
-  "confidence": 0.97
-}
-```
+## Supported Models (17 total)
 
-## Dynamic Keyword Expansion (Rolling Adjustment)
+### Anthropic
+| Model | $/1M tokens |
+|---|---|
+| `anthropic/claude-sonnet-4-6` | $3.00 ★ ELITE default |
+| `anthropic/claude-opus-4-5` | $15.00 |
+| `anthropic/claude-haiku-4-5` | $0.80 |
 
-Add new routing signals at runtime:
+### OpenAI
+| Model | $/1M tokens |
+|---|---|
+| `openai/gpt-5.2` | $15.00 |
+| `openai/gpt-4o` | $5.00 |
+| `openai/gpt-4o-mini` | $0.15 ★ BALANCED default |
+| `openai/o3` | $8.00 |
+| `openai/o4-mini` | $1.10 |
+
+### Google
+| Model | $/1M tokens |
+|---|---|
+| `google/gemini-3.0-pro` | $10.00 |
+| `google/gemini-2.5-pro` | $7.00 |
+| `google/gemini-2.5-flash` | $0.60 |
+| `google/gemini-2.5-flash-lite` | $0.10 |
+
+### DeepSeek
+| Model | $/1M tokens |
+|---|---|
+| `deepseek/deepseek-chat` | $0.14 ★ BASIC default |
+| `deepseek/deepseek-reasoner` | $0.55 |
+
+### xAI (Grok)
+| Model | $/1M tokens |
+|---|---|
+| `xai/grok-3` | $3.00 |
+| `xai/grok-3-mini` | $0.30 |
+
+## Override Models at Runtime
 
 ```python
-router.add_keywords("ELITE", ["blockchain audit", "zero-knowledge proof"])
-```
-
-Every query is logged to `query_history.json` for offline refinement.
-
-## Overriding Model Tiers
-
-```python
+# Use GPT-5.2 for ELITE, Gemini Flash Lite for BASIC
 router = ModelRouter(
-    elite_model="anthropic/claude-opus-4-5-20251101",
-    balanced_model="openai/gpt-4o",
-    basic_model="deepseek/deepseek-chat"
+    elite_model="openai/gpt-5.2",
+    balanced_model="google/gemini-2.5-flash",
+    basic_model="google/gemini-2.5-flash-lite",
 )
 ```
 
-## Security and Privacy
+```python
+# Swap a tier's model without recreating the router
+router.set_model("ELITE", "anthropic/claude-opus-4-5")
+```
 
-- This skill does **not** make any external network calls.
-- Query logs are stored locally in `query_history.json` only.
-- No API keys are required by this skill itself.
+## List All Available Models (CLI)
 
-## External Endpoints
+```bash
+python3 scripts/model_router.py --list-models
+```
 
-None. This skill operates fully locally.
+## CLI Usage
 
-## Trust Statement
+```bash
+# Route a single query
+python3 scripts/model_router.py "Implement AES encryption from scratch"
 
-This skill performs read-only analysis of input text and writes only to a local `query_history.json` log file. It does not execute external requests or modify system state.
+# Override ELITE model
+python3 scripts/model_router.py --elite openai/gpt-5.2 "Write a compiler"
+
+# Run full smoke-test
+python3 scripts/model_router.py
+```
+
+## Dynamic Keyword Expansion
+
+```python
+router.add_keywords("ELITE", ["cryptographic proof", "zero-knowledge"])
+```
+
+## Example Output
+
+```
+Query                                              Predicted  Expected   ✓  Cost Info
+────────────────────────────────────────────────────────────────────────────────────
+How are you doing today?                           BASIC      BASIC      ✓  $0.14/M  saved 98.6%
+Summarize this article in three bullet points.     BALANCED   BALANCED   ✓  $0.15/M  saved 98.5%
+Implement a thread-safe LRU cache in Python.       ELITE      ELITE      ✓  $3.0/M   saved 70.0%
+```
+
+## Security & Privacy
+
+- **Zero external calls**: All classification runs locally.
+- **No API keys**: The router itself needs none.
+- **Transparent weights**: All model parameters live in `scripts/model_weights.py` — fully auditable.
+
+---
+*Save costs, route smarter. Built for the OpenClaw community.*
