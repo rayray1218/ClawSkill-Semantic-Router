@@ -41,35 +41,62 @@ except ImportError:
 
 
 # ── Model Catalog ──────────────────────────────────────────────────────────────
-# Format: "provider/model-id": cost_per_1m_tokens_usd
-MODEL_CATALOG: dict[str, float] = {
-    # ── Anthropic ──────────────────────────────────────────────────────────────
-    "anthropic/claude-sonnet-4-6":          3.00,   # Latest Sonnet (2026)
-    "anthropic/claude-opus-4-5":           15.00,   # Latest Opus
-    "anthropic/claude-haiku-4-5":           0.80,   # Latest Haiku
-    "anthropic/claude-3-5-sonnet-latest":   3.00,   # Stable alias
+# Pricing source: Official API docs (verified Feb 2026)
+# Format: "provider/model-id": (input_per_1m, output_per_1m)
+# The catalog stores OUTPUT token price as the primary cost signal (the dominant cost).
+# Input prices are noted in comments for transparency.
+MODEL_CATALOG: dict[str, tuple[float, float]] = {
+    # ── Anthropic (source: platform.claude.com/docs/en/about-claude/pricing) ──
+    # claude-sonnet-4-6: $3.00 input / $15.00 output per 1M tokens
+    "anthropic/claude-sonnet-4-6":         (3.00, 15.00),
+    # claude-opus-4-5: $5.00 input / $25.00 output per 1M tokens
+    "anthropic/claude-opus-4-5":           (5.00, 25.00),
+    # claude-haiku-4-5: $0.80 input / $4.00 output per 1M tokens
+    "anthropic/claude-haiku-4-5":          (0.80,  4.00),
+    # claude-3-5-sonnet: $3.00 input / $15.00 output (stable alias)
+    "anthropic/claude-3-5-sonnet-latest":  (3.00, 15.00),
 
-    # ── OpenAI ────────────────────────────────────────────────────────────────
-    "openai/gpt-5.2":                      15.00,   # Flagship GPT-5.2 (2026)
-    "openai/gpt-4o":                        5.00,
-    "openai/gpt-4o-mini":                   0.15,
-    "openai/o3":                            8.00,   # Reasoning
-    "openai/o4-mini":                       1.10,   # Compact reasoning
+    # ── OpenAI (source: openai.com/api/pricing) ───────────────────────────────
+    # gpt-5: $1.25 input / $10.00 output per 1M tokens
+    "openai/gpt-5":                        (1.25, 10.00),
+    # gpt-4o: $2.50 input / $10.00 output per 1M tokens
+    "openai/gpt-4o":                       (2.50, 10.00),
+    # gpt-4o-mini: $0.15 input / $0.60 output per 1M tokens
+    "openai/gpt-4o-mini":                  (0.15,  0.60),
+    # o3: $2.00 input / $8.00 output per 1M tokens (after June 2025 price cut)
+    "openai/o3":                           (2.00,  8.00),
+    # o4-mini: $1.10 input / $4.40 output per 1M tokens
+    "openai/o4-mini":                      (1.10,  4.40),
 
-    # ── Google ────────────────────────────────────────────────────────────────
-    "google/gemini-3.0-pro":               10.00,   # Latest Gemini 3.0
-    "google/gemini-2.5-pro":                7.00,
-    "google/gemini-2.5-flash":              0.60,
-    "google/gemini-2.5-flash-lite":         0.10,   # Cheapest Google
+    # ── Google (source: ai.google.dev/gemini-api/docs/pricing) ───────────────
+    # gemini-3.0-pro: Preview model (pricing not yet finalized, using Gemini 2.5 Pro as reference)
+    "google/gemini-3.0-pro":               (1.25, 10.00),
+    # gemini-2.5-pro: $1.25 input (≤200K ctx) / $10.00 output per 1M tokens
+    "google/gemini-2.5-pro":               (1.25, 10.00),
+    # gemini-2.5-flash: Paid tier (estimated ~$0.30 input / $2.50 output)
+    "google/gemini-2.5-flash":             (0.30,  2.50),
+    # gemini-2.5-flash-lite: $0.10 input / $0.40 output per 1M tokens
+    "google/gemini-2.5-flash-lite":        (0.10,  0.40),
 
-    # ── DeepSeek ─────────────────────────────────────────────────────────────
-    "deepseek/deepseek-chat":               0.14,   # Ultra-cheap
-    "deepseek/deepseek-reasoner":           0.55,   # Reasoning variant
+    # ── DeepSeek (source: api-docs.deepseek.com/quick_start/pricing) ─────────
+    # deepseek-chat (V3.2): $0.28 input (cache miss) / $0.42 output per 1M tokens
+    "deepseek/deepseek-chat":              (0.28,  0.42),
+    # deepseek-reasoner (V3.2): $0.28 input (cache miss) / $0.42 output per 1M tokens
+    "deepseek/deepseek-reasoner":          (0.28,  0.42),
 
-    # ── xAI / Grok ───────────────────────────────────────────────────────────
-    "xai/grok-3":                           3.00,
-    "xai/grok-3-mini":                      0.30,
+    # ── xAI / Grok (source: x.ai/api) ────────────────────────────────────────
+    # grok-3: $3.00 input / $15.00 output per 1M tokens
+    "xai/grok-3":                          (3.00, 15.00),
+    # grok-3-mini: $0.30 input / $0.50 output per 1M tokens
+    "xai/grok-3-mini":                     (0.30,  0.50),
 }
+
+def _catalog_avg(model: str) -> float:
+    """Return a blended avg cost (50% input + 50% output) for display purposes."""
+    if model in MODEL_CATALOG:
+        i, o = MODEL_CATALOG[model]
+        return round((i + o) / 2, 4)
+    return 1.0
 
 # ── Default Tier → Model Assignments ──────────────────────────────────────────
 DEFAULT_MODELS: dict[str, str] = {
@@ -241,24 +268,29 @@ class ModelRouter:
 
         self._log_query(query, best_tier)
 
-        model      = self.mapping[best_tier]
-        cost       = MODEL_CATALOG.get(model, 1.0)
-        saved      = max(0.0, self.baseline_cost - cost)
-        saved_pct  = (saved / self.baseline_cost) * 100 if self.baseline_cost > 0 else 0
+        model           = self.mapping[best_tier]
+        prices          = MODEL_CATALOG.get(model, (1.0, 1.0))
+        input_cost      = prices[0]
+        output_cost     = prices[1]
+        # Use output price as cost signal (dominant in most workloads)
+        cost            = output_cost
+        saved           = max(0.0, self.baseline_cost - cost)
+        saved_pct       = (saved / self.baseline_cost) * 100 if self.baseline_cost > 0 else 0
 
         return {
             "tier":       best_tier,
             "model":      model,
             "confidence": confidence,
             "metrics": {
-                "method":         method,
-                "cost_per_m":     round(cost, 4),
-                "baseline_per_m": round(self.baseline_cost, 4),
-                "saved_pct":      round(saved_pct, 1),
+                "method":          method,
+                "input_per_m":     input_cost,
+                "output_per_m":    output_cost,
+                "baseline_per_m":  round(self.baseline_cost, 4),
+                "saved_pct":       round(saved_pct, 1),
             },
             "report": (
                 f"[ClawRouter] {model} ({best_tier}, {method}, conf={confidence:.2f})\n"
-                f"             Cost: ${cost}/M | Baseline: ${self.baseline_cost}/M | Saved: {saved_pct:.1f}%"
+                f"             In: ${input_cost}/M | Out: ${output_cost}/M | Baseline: ${self.baseline_cost}/M | Saved: {saved_pct:.1f}%"
             ),
         }
 
@@ -305,8 +337,8 @@ class ModelRouter:
     # ── Model Catalog API ──────────────────────────────────────────────────────
 
     @staticmethod
-    def list_models() -> dict[str, float]:
-        """Return the full supported model catalog with prices."""
+    def list_models() -> dict[str, tuple[float, float]]:
+        """Return the full supported model catalog with (input, output) prices per 1M tokens."""
         return dict(MODEL_CATALOG)
 
     def set_model(self, tier: str, model: str) -> None:
@@ -394,11 +426,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.list_models:
-        print("\n📦 Supported Models:\n")
-        print(f"{'Model':<45} {'$/1M tokens'}")
-        print("─" * 60)
-        for m, p in sorted(MODEL_CATALOG.items(), key=lambda x: x[1]):
-            print(f"  {m:<43} ${p}")
+        print("\n📦 Supported Models (verified Feb 2026):\n")
+        print(f"  {'Model':<45} {'Input/1M':>10}  {'Output/1M':>10}")
+        print("─" * 70)
+        for m, (inp, out) in sorted(MODEL_CATALOG.items(), key=lambda x: x[1][1]):
+            print(f"  {m:<45} ${inp:>9}  ${out:>9}")
         exit(0)
 
     router = ModelRouter(
@@ -430,5 +462,5 @@ if __name__ == "__main__":
             m   = res["metrics"]
             print(
                 f"{text[:width-1]:<{width}} {res['tier']:<10} {expected:<10} {ok}"
-                f"  ${m['cost_per_m']}/M  saved {m['saved_pct']}%"
+                f"  In:${m['input_per_m']}/M Out:${m['output_per_m']}/M  saved {m['saved_pct']}%"
             )

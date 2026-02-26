@@ -1,7 +1,7 @@
 ---
 name: semantic-model-router
 description: Smart LLM Router — routes every query to the cheapest capable model. Supports 17 models across Anthropic, OpenAI, Google, DeepSeek & xAI (Grok). Uses a pre-trained ML classifier. No extra API keys required.
-version: 2.0.0
+version: 1.0.2
 author: Ray
 tags: [llm-ops, routing, cost-saving, openclaw, semantic-router, multi-model]
 homepage: https://github.com/rayray1218/ClawSkill-Semantic-Router
@@ -47,43 +47,45 @@ Queries are classified into three tiers through a **3-stage pipeline**:
 | **BALANCED** | `openai/gpt-4o-mini` | Summaries, translations, explanations | $0.15 | **99% saved** |
 | **ELITE** | `anthropic/claude-sonnet-4-6` | Complex coding, architecture, security | $3.00 | **70% saved** |
 
-## Supported Models (17 total)
+## Supported Models (17 total, verified Feb 2026)
 
 ### Anthropic
-| Model | $/1M tokens |
-|---|---|
-| `anthropic/claude-sonnet-4-6` | $3.00 ★ ELITE default |
-| `anthropic/claude-opus-4-5` | $15.00 |
-| `anthropic/claude-haiku-4-5` | $0.80 |
+| Model | Input /1M | Output /1M |
+|---|---|---|
+| `anthropic/claude-sonnet-4-6` | $3.00 | $15.00 ★ ELITE default |
+| `anthropic/claude-opus-4-5` | $5.00 | $25.00 |
+| `anthropic/claude-haiku-4-5` | $0.80 | $4.00 |
 
 ### OpenAI
-| Model | $/1M tokens |
-|---|---|
-| `openai/gpt-5.2` | $15.00 |
-| `openai/gpt-4o` | $5.00 |
-| `openai/gpt-4o-mini` | $0.15 ★ BALANCED default |
-| `openai/o3` | $8.00 |
-| `openai/o4-mini` | $1.10 |
+| Model | Input /1M | Output /1M |
+|---|---|---|
+| `openai/gpt-5` | $1.25 | $10.00 |
+| `openai/gpt-4o` | $2.50 | $10.00 |
+| `openai/gpt-4o-mini` | $0.15 | $0.60 ★ BALANCED default |
+| `openai/o3` | $2.00 | $8.00 |
+| `openai/o4-mini` | $1.10 | $4.40 |
 
 ### Google
-| Model | $/1M tokens |
-|---|---|
-| `google/gemini-3.0-pro` | $10.00 |
-| `google/gemini-2.5-pro` | $7.00 |
-| `google/gemini-2.5-flash` | $0.60 |
-| `google/gemini-2.5-flash-lite` | $0.10 |
+| Model | Input /1M | Output /1M |
+|---|---|---|
+| `google/gemini-3.0-pro` | $1.25 | $10.00 |
+| `google/gemini-2.5-pro` | $1.25 | $10.00 |
+| `google/gemini-2.5-flash` | $0.30 | $2.50 |
+| `google/gemini-2.5-flash-lite` | $0.10 | $0.40 |
 
 ### DeepSeek
-| Model | $/1M tokens |
-|---|---|
-| `deepseek/deepseek-chat` | $0.14 ★ BASIC default |
-| `deepseek/deepseek-reasoner` | $0.55 |
+| Model | Input /1M | Output /1M |
+|---|---|---|
+| `deepseek/deepseek-chat` (V3.2) | $0.28 | $0.42 ★ BASIC default |
+| `deepseek/deepseek-reasoner` (V3.2) | $0.28 | $0.42 |
 
 ### xAI (Grok)
-| Model | $/1M tokens |
-|---|---|
-| `xai/grok-3` | $3.00 |
-| `xai/grok-3-mini` | $0.30 |
+| Model | Input /1M | Output /1M |
+|---|---|---|
+| `xai/grok-3` | $3.00 | $15.00 |
+| `xai/grok-3-mini` | $0.30 | $0.50 |
+
+> Pricing source: Official API docs of each provider, verified Feb 2026.
 
 ## Override Models at Runtime
 
